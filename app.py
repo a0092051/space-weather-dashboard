@@ -153,7 +153,7 @@ with st.expander("🚀 Send Test Alert to Telegram"):
     if st.button("Send Test Alert Now"):
         from datetime import datetime
         test_message = (
-            f"🚨 *[TEST]* Space Weather Alert (Simulated)\n"
+            f"🚨  Space Weather Alert \n"
             f"Score: {score} | Risk: {threat_level}\n"
             f"Speed: {conditions.get('speed', 'N/A')} km/s | "
             f"Bz: {conditions.get('bz', 'N/A')} nT\n"
@@ -162,7 +162,7 @@ with st.expander("🚀 Send Test Alert to Telegram"):
         )
         success = send_telegram_alert(
             bot_token="7926241461:AAH-otA3NdtIcIExlk5LD12-2ygohcQ5cQs",
-            chat_id="78372772",
+            chat_id="-1002001864016",
             message=test_message
         )
         if success:
