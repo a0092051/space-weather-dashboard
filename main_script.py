@@ -380,3 +380,24 @@ def estimate_cme_eta(flare_class: str, proj_df):
             "confidence": "Low (40%)",
             "note": f"Exception during CME estimation: {e}"
         }
+import time
+
+COOLDOWN_FILE = "data/last_alert.txt"
+COOLDOWN_SECONDS = 3600  # 1 hour default
+
+def can_send_alert():
+    try:
+        if os.path.exists(COOLDOWN_FILE):
+            with open(COOLDOWN_FILE, "r") as f:
+                last_time = float(f.read().strip())
+                return (time.time() - last_time) > COOLDOWN_SECONDS
+        return True
+    except Exception:
+        return True
+
+def record_alert_time():
+    try:
+        with open(COOLDOWN_FILE, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
