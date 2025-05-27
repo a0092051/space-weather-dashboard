@@ -63,7 +63,7 @@ def evaluate_conditions(df_plasma, df_mag):
 
     return conditions
 
-def compute_forecast_score(conditions, dst_value=None):
+def compute_forecast_score(conditions):
     score = 0
     triggered_rules = []
 
@@ -73,22 +73,28 @@ def compute_forecast_score(conditions, dst_value=None):
 
     if isinstance(speed, (int, float)) and speed > 500:
         score += 2
-        triggered_rules.append("High Solar Wind Speed (>500 km/s)")
+        triggered_rules.append("🔹 High solar wind speed > 500 km/s")
 
     if isinstance(density, (int, float)) and density > 10:
         score += 1
-        triggered_rules.append("Elevated Plasma Density (>10 p/cm³)")
+        triggered_rules.append("🔹 Elevated plasma density > 10 p/cm³")
 
-    if isinstance(bz, (int, float)) and bz < -10:
-        score += 3
-        triggered_rules.append("Strong Southward Bz (< -10 nT)")
-
-    if isinstance(speed, (int, float)) and speed > 400 and isinstance(bz, (int, float)) and bz < -5:
-        score += 2
-        triggered_rules.append("Moderate Wind + Southward Bz")
+    # Replacing Dst logic with IMF Bz-based scoring
+    if isinstance(bz, (int, float)):
+        if bz < -15:
+            score += 3
+            triggered_rules.append("🔻 Strong southward Bz < -15 nT")
+        elif bz < -10:
+            score += 2
+            triggered_rules.append("🔻 Moderate southward Bz < -10 nT")
+        elif bz < -5:
+            score += 1
+            triggered_rules.append("🔻 Mild southward Bz < -5 nT")
+        else:
+            triggered_rules.append("🔸 Northward or weak Bz ≥ -5 nT")
 
     if score == 0:
-        triggered_rules.append("All Quiet")
+        triggered_rules.append("✅ All quiet - no thresholds breached")
 
     # Assign threat level
     if score >= 6:
@@ -102,3 +108,4 @@ def compute_forecast_score(conditions, dst_value=None):
         color = "green"
 
     return score, triggered_rules, level, color
+

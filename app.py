@@ -33,7 +33,8 @@ conditions = evaluate_conditions(df_plasma, df_mag)
 
 # Placeholder Dst value (can be made live later)
 dst_value = -55
-score, triggered, threat_level, threat_color = compute_forecast_score(conditions, dst_value)
+score, triggered, threat_level, threat_color = compute_forecast_score(conditions)
+
 
 # 2. Fetch flare and SEP activity
 xray_flux = fetch_goes_xray()
