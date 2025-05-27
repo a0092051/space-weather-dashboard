@@ -1,4 +1,3 @@
-# app.py (incrementally improved)
 import streamlit as st
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -17,42 +16,42 @@ from main_script import (
     classify_sep,
     get_sep_flux_data_and_projection,
     estimate_space_weather_risk,
-    estimate_cme_eta,
-    log_forecast_to_csv,
-    can_send_alert,
-    record_alert_time
+    log_forecast_to_csv
 )
-
-st.set_page_config(page_title="Space Weather Dashboard", layout="wide")
-st.title("Real-Time Space Weather Dashboard")
-
-# 1. Fetch upstream data
 df_plasma = fetch_noaa_data(plasma_url)
 df_mag = fetch_noaa_data(mag_url)
 conditions = evaluate_conditions(df_plasma, df_mag)
 
-# Placeholder Dst value (can be made live later)
-dst_value = -55
+# Recalculate forecast score with Dst
 score, triggered, threat_level, threat_color = compute_forecast_score(conditions)
 
+st.set_page_config(page_title="Space Weather Dashboard", layout="wide")
+st.title("Real-Time Space Weather Dashboard")
 
-# 2. Fetch flare and SEP activity
+# Fetch space weather data
+df_plasma = fetch_noaa_data(plasma_url)
+df_mag = fetch_noaa_data(mag_url)
+conditions = evaluate_conditions(df_plasma, df_mag)
+score, triggered, threat_level, threat_color = compute_forecast_score(conditions)
+
+# Fetch flare/SEP data + projection
 xray_flux = fetch_goes_xray()
 flare_class = classify_flare(xray_flux)
+
 sep_flux = fetch_goes_sep()
 sep_class = classify_sep(sep_flux)
 
 actual_df, proj_df = get_sep_flux_data_and_projection()
-cme_eta_forecast = estimate_cme_eta(flare_class, proj_df)
 risk_assessment = estimate_space_weather_risk(conditions, xray_flux, sep_flux, proj_df)
 
-# 3. Display conditions
+# Display real-time conditions
 st.metric("Solar Wind Speed (km/s)", f"{conditions['speed']:.1f}" if isinstance(conditions['speed'], (int, float)) else "N/A")
 st.metric("Plasma Density (p/cm³)", f"{conditions['density']:.1f}" if isinstance(conditions['density'], (int, float)) else "N/A")
 st.metric("Bz (nT)", f"{conditions['bz']:.1f}" if isinstance(conditions['bz'], (int, float)) else "N/A")
 st.metric("Risk Level", conditions['risk_level'])
-st.metric("Dst Index (nT)", dst_value)
 
+
+# Forecast Score & Threat
 st.subheader("Forecast Index")
 st.metric("Forecast Score", score)
 
@@ -66,7 +65,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 4. Flare & SEP indicators
+# Flare and SEP levels
 st.subheader("Solar Flare & SEP Activity")
 col1, col2 = st.columns(2)
 col1.metric("GOES X-ray Flux", f"{xray_flux:.1e}" if xray_flux else "N/A")
@@ -74,17 +73,19 @@ col1.metric("Flare Class", flare_class)
 col2.metric("Proton Flux (>10 MeV)", f"{sep_flux:.1f} pfu" if sep_flux else "N/A")
 col2.metric("Radiation Storm Level", sep_class)
 
-# 5. SEP projection chart
+# Proton Flux Trend + Projection
 st.subheader("📊 Proton Flux Trend & Projection")
 if actual_df is not None:
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(actual_df['time_tag'], actual_df['flux'], label='Observed (>10 MeV)', color='blue', linewidth=2)
     if proj_df is not None and not proj_df.empty:
         ax.plot(proj_df['time_tag'], proj_df['flux'], '--', label='Projected (Next 1hr)', color='orange', linewidth=2)
+
     thresholds = {"S1 (10)": 10, "S2 (100)": 100, "S3 (1000)": 1000, "S4 (10000)": 10000, "S5 (100000)": 100000}
     for label, value in thresholds.items():
         ax.axhline(value, linestyle='--', linewidth=1, color='gray')
         ax.text(actual_df['time_tag'].iloc[-1], value * 1.1, label, fontsize=8, color='gray', verticalalignment='bottom')
+
     ax.set_yscale('log')
     ax.set_xlabel("Time (UTC)")
     ax.set_ylabel("Flux (pfu)")
@@ -96,7 +97,21 @@ if actual_df is not None:
 else:
     st.warning("Unable to retrieve or display proton flux data.")
 
-# 6. Forecasted Risk Probabilities
+from main_script import estimate_cme_eta
+
+# Compute flare-based G-storm ETA forecast
+cme_eta_forecast = estimate_cme_eta(flare_class, proj_df)
+
+if cme_eta_forecast:
+    st.subheader("🌞 Forecasted CME Arrival Window")
+    st.markdown(f"""
+**Risk Level:** {cme_eta_forecast['risk']}  
+**Expected Arrival:** {cme_eta_forecast['eta']}  
+**Confidence:** {cme_eta_forecast['confidence']}  
+📝 _{cme_eta_forecast['note']}_  
+""")
+
+
 st.subheader("⚠️ Forecasted Space Weather Risk Levels")
 col1, col2 = st.columns(2)
 col1.metric("S3+ Radiation Storm Chance", f"{risk_assessment['s3_plus_prob']}%")
@@ -110,105 +125,103 @@ with st.expander("Reasoning for S3+/G4+ Risk"):
     for reason in risk_assessment["g4_reason"]:
         st.write("•", reason)
 
-# 7. CME ETA forecast
-if cme_eta_forecast:
-    st.subheader("🌞 Forecasted CME Arrival Window")
-    st.markdown(f"""
-**Risk Level:** {cme_eta_forecast['risk']}  
-**Expected Arrival:** {cme_eta_forecast['eta']}  
-**Confidence:** {cme_eta_forecast['confidence']}  
-📝 _{cme_eta_forecast['note']}_
-""")
-
-# 8. Forecast Index Explanation
 with st.expander("📖 What is the Forecast Index?"):
     st.markdown("""
-The **Forecast Index** is a real-time score from upstream solar wind conditions (e.g. Bz, density, Dst). Use it as context, not a primary trigger.
-    """)
+The **Forecast Index** is a real-time score that reflects current space weather risks based on upstream solar wind data.
 
-# 9. Trend logging
+- 0–2: 🟢 Low
+- 3–5: 🟠 Moderate
+- 6–8: 🔴 High
+
+Used for near-term (30–60 min) operational awareness.
+""")
+
+
+
+
+# Log to CSV
 log_forecast_to_csv(score, threat_level, conditions, flare_class, sep_class)
+
+# Trend chart
 st.subheader("📈 Forecast Score Trend")
 try:
     if os.path.exists("data/forecast_log.csv"):
-        df_log = pd.read_csv("data/forecast_log.csv", parse_dates=["timestamp"])
-        if len(df_log) >= 2:
-            st.line_chart(df_log.set_index("timestamp")["score"])
+        log_df = pd.read_csv("data/forecast_log.csv", parse_dates=["timestamp"])
+        if len(log_df) >= 2:
+            st.line_chart(log_df.set_index("timestamp")[["score"]])
         else:
             st.info("Waiting for more data points to generate trend...")
     else:
-        st.info("No forecast log yet.")
+        st.info("No forecast log found.")
 except Exception as e:
-    st.error(f"Error loading forecast log: {e}")
+    st.error(f"Error loading forecast trend: {e}")
 
-# 10. Alert logic
-should_alert = False
-alert_reasons = []
+from datetime import datetime
 
-if cme_eta_forecast and cme_eta_forecast['eta'] != "N/A":
-    should_alert = True
-    alert_reasons.append("☀️ CME likely from flare")
-if risk_assessment["s3_plus_prob"] >= 50:
-    should_alert = True
-    alert_reasons.append("🛰️ High probability of radiation storm (S3+)")
-if risk_assessment["g4_plus_prob"] >= 50:
-    should_alert = True
-    alert_reasons.append("🌐 Elevated geomagnetic storm risk (G4+)")
-if score >= 6 and (flare_class.startswith("M") or flare_class.startswith("X") or sep_flux > 10):
-    should_alert = True
-    alert_reasons.append("⚠️ Upstream solar wind triggers (score ≥6)")
-
-if should_alert and can_send_alert():
-    action_prompt = (
-        "🟢 Relax, all is good for now." if threat_level == "Low" else
-        "🟠 Stand by for potential ops activation." if threat_level == "Moderate" else
-        "🔴 Go, go, go! Off to office now!"
-    )
+# Telegram alert
+if score >= 6 or score >= 3:
     alert_message = (
         f"🚨 *Space Weather Alert ({threat_level})*\n"
         f"Score: {score} | Risk: {threat_level}\n"
-        f"Dst Index: {dst_value} nT\n"
         f"Prob. S3+: {risk_assessment['s3_plus_prob']}% | G4+: {risk_assessment['g4_plus_prob']}%\n"
-        f"Forecast Confidence: {cme_eta_forecast['confidence']}\n"
-        + "\n".join(alert_reasons) + "\n"
-        f"{action_prompt}\n"
-        f"📡 Forecast Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+
     )
+
+    if cme_eta_forecast:
+        alert_message += (
+            f"Forecasted CME Impact: {cme_eta_forecast['risk']} – ETA {cme_eta_forecast['eta']}\n"
+            f"Forecast Confidence: {cme_eta_forecast['confidence']}\n"
+        )
+
+    # Add meme-style call-to-action
+    if score >= 6:
+        alert_message += "🔥 *Go, go, go! Back to the war room!*"
+    elif score >= 3:
+        alert_message += "⚠️ *Stand by... something’s brewing.*"
+    else:
+        alert_message += "😎 *Chill. All systems nominal.*"
+
+    # Forecast timestamp
+    alert_message += f"\n📡 Forecast Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+
     send_telegram_alert(
         bot_token="7926241461:AAH-otA3NdtIcIExlk5LD12-2ygohcQ5cQs",
-        chat_id="-1002001864016",
+        chat_id="78372772",
         message=alert_message
     )
-    record_alert_time()
 
-# 11. Manual operational trigger (same format as auto-alert)
-with st.expander("🚀 Manually Trigger Space Weather Alert"):
-    if st.button("Send Manual Alert Now"):
-        action_prompt = (
-            "🟢 Relax, all is good for now." if threat_level == "Low" else
-            "🟠 Stand by for potential ops activation." if threat_level == "Moderate" else
-            "🔴 Go, go, go! Off to office now!"
-        )
-
-        manual_alert_message = (
-            f"🚨 *Space Weather Alert ({threat_level})*\n"
+# Manual test alert
+with st.expander("🚀 Send Test Alert to Telegram"):
+    if st.button("Send Test Alert Now"):
+        test_message = (
+            f"🚨 *Space Weather Alert*\n"
             f"Score: {score} | Risk: {threat_level}\n"
-            f"Dst Index: {dst_value} nT\n"
             f"Prob. S3+: {risk_assessment['s3_plus_prob']}% | G4+: {risk_assessment['g4_plus_prob']}%\n"
-            f"Forecast Confidence: {cme_eta_forecast['confidence']}\n"
-            + "\n".join(alert_reasons) + "\n"
-            f"{action_prompt}\n"
-            f"📡 Forecast Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+
+
         )
+
+        if cme_eta_forecast:
+            test_message += (
+                f"Forecasted CME Impact: {cme_eta_forecast['risk']} – ETA {cme_eta_forecast['eta']}\n"
+                f"Forecast Confidence: {cme_eta_forecast['confidence']}\n"
+            )
+
+        if score >= 6:
+            test_message += "🔥 *Go, go, go! Back to the war room!*"
+        elif score >= 3:
+            test_message += "⚠️ *Stand by... something’s brewing.*"
+        else:
+            test_message += "😎 *Chill. All systems nominal.*"
+
+        test_message += f"\n📡 Forecast Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
 
         success = send_telegram_alert(
             bot_token="7926241461:AAH-otA3NdtIcIExlk5LD12-2ygohcQ5cQs",
             chat_id="-1002001864016",
-            message=manual_alert_message
+            message=test_message
         )
-
         if success:
-            st.success("✅ Manual alert sent successfully!")
-            record_alert_time()
+            st.success("✅ Simulated alert sent successfully!")
         else:
-            st.error("❌ Failed to send manual alert.")
+            st.error("❌ Failed to send test alert.")
