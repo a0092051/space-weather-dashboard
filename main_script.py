@@ -74,33 +74,19 @@ def compute_forecast_score(conditions, dst_value=None):
 
     if isinstance(speed, (int, float)) and speed > 500:
         score += 2
-        triggered_rules.append("High Solar Wind Speed")
+        triggered_rules.append("High Solar Wind Speed (>500 km/s)")
 
     if isinstance(density, (int, float)) and density > 10:
         score += 1
-        triggered_rules.append("Elevated Plasma Density")
+        triggered_rules.append("Elevated Plasma Density (>10 p/cm³)")
 
     if isinstance(bz, (int, float)) and bz < -10:
         score += 3
-        triggered_rules.append("Strong Southward IMF Bz")
+        triggered_rules.append("Strong Southward Bz (< -10 nT)")
 
     if isinstance(speed, (int, float)) and speed > 400 and isinstance(bz, (int, float)) and bz < -5:
         score += 2
         triggered_rules.append("Moderate Wind + Southward Bz")
-
-    # 🛰️ Add Dst-based scoring
-    if dst_value is not None:
-        if dst_value < -100:
-            score += 3
-            triggered_rules.append("Dst < -100 nT: Major geomagnetic storm")
-        elif dst_value < -50:
-            score += 2
-            triggered_rules.append("Dst < -50 nT: Moderate geomagnetic storm")
-        elif dst_value < -30:
-            score += 1
-            triggered_rules.append("Dst < -30 nT: Minor geomagnetic activity")
-        else:
-            triggered_rules.append("Dst > -30 nT: Quiet geomagnetic conditions")
 
     if score == 0:
         triggered_rules.append("All Quiet")
@@ -117,6 +103,7 @@ def compute_forecast_score(conditions, dst_value=None):
         color = "green"
 
     return score, triggered_rules, level, color
+
 
 import requests
 import pandas as pd
