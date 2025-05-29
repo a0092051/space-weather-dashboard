@@ -194,6 +194,25 @@ def classify_sep(flux):
     else:
         return "Quiet"
 
+import requests
+
+def fetch_latest_dst():
+    """
+    Fetch the latest Dst index (Disturbance Storm Time).
+    Source: Kyoto WDC Quicklook or NOAA mirror
+    Returns the latest Dst value (int, in nT) or None if fetch fails.
+    """
+    try:
+        url = "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if data and isinstance(data, list):
+            latest_entry = data[-1]
+            dst_value = latest_entry.get("dst", None)
+            return int(dst_value) if dst_value is not None else None
+    except:
+        return None
+
 import csv
 from datetime import datetime
 
@@ -280,22 +299,46 @@ def estimate_space_weather_risk(conditions, flare_flux, proton_flux, proj_proton
     speed = conditions.get("speed", 0)
     bz = conditions.get("bz", 0)
 
-    if isinstance(speed, (int, float)) and speed > 600:
-        risk["g4_plus_prob"] += 30
-        risk["g4_reason"].append("Solar wind speed > 600 km/s")
+    # Tiered solar wind speed scoring
+    if isinstance(speed, (int, float)):
+        if speed > 600:
+            risk["g4_plus_prob"] += 30
+            risk["g4_reason"].append("Very high solar wind speed > 600 km/s")
+        elif speed > 500:
+            risk["g4_plus_prob"] += 15
+            risk["g4_reason"].append("Moderately high solar wind speed > 500 km/s")
 
-    if isinstance(bz, (int, float)) and bz < -15:
-        risk["g4_plus_prob"] += 40
-        risk["g4_reason"].append("IMF Bz < -15 nT")
+    # Tiered IMF Bz scoring
+    if isinstance(bz, (int, float)):
+        if bz < -15:
+            risk["g4_plus_prob"] += 40
+            risk["g4_reason"].append("Strongly southward IMF Bz < -15 nT")
+        elif bz < -10:
+            risk["g4_plus_prob"] += 20
+            risk["g4_reason"].append("Moderately southward IMF Bz < -10 nT")
 
-    if isinstance(speed, (int, float)) and speed > 500 and isinstance(bz, (int, float)) and bz < -10:
-        risk["g4_plus_prob"] += 20
-        risk["g4_reason"].append("Strong CME signature")
+    # Combined signature indicating possible CME
+    if isinstance(speed, (int, float)) and isinstance(bz, (int, float)):
+        if speed > 550 and bz < -12:
+            risk["g4_plus_prob"] += 15
+            risk["g4_reason"].append("CME-like combination: speed > 550 & Bz < -12")
 
+    # Optional: Add Dst indicator if available
+    from main_script import fetch_latest_dst
+    try:
+        dst = fetch_latest_dst()
+        if dst is not None and dst < -100:
+            risk["g4_plus_prob"] += 15
+            risk["g4_reason"].append("Dst index < -100 nT indicates ongoing storm")
+    except:
+        pass  # fallback in case of import or fetch failure
+
+    # Cap maximum probability to avoid overestimation
     risk["s3_plus_prob"] = min(risk["s3_plus_prob"], 95)
     risk["g4_plus_prob"] = min(risk["g4_plus_prob"], 95)
 
     return risk
+
 
 def estimate_cme_eta(flare_class: str, proj_df):
     try:
@@ -366,3 +409,118 @@ def estimate_cme_eta(flare_class: str, proj_df):
             "confidence": "Low (40%)",
             "note": f"Exception during CME estimation: {e}"
         }
+
+import requests
+from datetime import datetime, timedelta
+
+def fetch_latest_noaa_g_level(hours=6):
+    """
+    Returns the most recent NOAA G-scale alert in the past `hours` (default 6)
+    from SWPC alerts feed.
+    """
+    try:
+        url = "https://services.swpc.noaa.gov/json/alerts.json"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+
+        # Filter for recent G-level alerts
+        recent_alerts = []
+        now = datetime.utcnow()
+        for alert in data:
+            if "Geomagnetic Storm" in alert.get("message", "") and "G" in alert.get("message", ""):
+                try:
+                    timestamp = datetime.strptime(alert["issue_time"], "%Y-%m-%dT%H:%M:%SZ")
+                    if now - timestamp <= timedelta(hours=hours):
+                        recent_alerts.append(alert)
+                except:
+                    continue
+
+        if recent_alerts:
+            latest_alert = sorted(recent_alerts, key=lambda a: a["issue_time"], reverse=True)[0]
+            for g_level in ["G5", "G4", "G3", "G2", "G1"]:
+                if g_level in latest_alert["message"]:
+                    return g_level
+        return "None"
+    except Exception as e:
+        print(f"NOAA G-level fetch failed: {e}")
+        return "None"
+
+def estimate_G_scale(score):
+    if score < 3:
+        return "Quiet"
+    elif score < 5:
+        return "G1"
+    elif score < 7:
+        return "G2"
+    elif score < 9:
+        return "G3"
+    elif score < 11:
+        return "G4"
+    else:
+        return "G5+"
+
+def estimate_G_scale(score: int) -> str:
+    if score >= 9:
+        return "G5"
+    elif score >= 8:
+        return "G4"
+    elif score >= 7:
+        return "G3"
+    elif score >= 6:
+        return "G2"
+    elif score >= 5:
+        return "G1"
+    else:
+        return "Quiet"
+
+def compute_model_a(df_plasma):
+    try:
+        speed = df_plasma['speed'].astype(float).iloc[-1]
+        density = df_plasma['density'].astype(float).iloc[-1]
+        score = 0
+        if speed > 600: score += 2
+        elif speed > 500: score += 1
+        if density > 10: score += 2
+        elif density > 5: score += 1
+        return score
+    except Exception:
+        return 0
+
+def compute_model_b():
+    try:
+        df_sep = fetch_goes_sep()
+        if df_sep is None or df_sep.empty:
+            return 0
+        df_sep['flux'] = df_sep['flux'].astype(float)
+        trend = df_sep['flux'].diff().mean()
+        if trend > 1: return 3
+        elif trend > 0.1: return 2
+        elif trend > 0.01: return 1
+        return 0
+    except Exception:
+        return 0
+
+def compute_model_c():
+    try:
+        dst_val = fetch_latest_dst()
+        if dst_val is None:
+            return 0
+        if dst_val < -100: return 3
+        elif dst_val < -50: return 2
+        elif dst_val < -30: return 1
+        return 0
+    except Exception:
+        return 0
+
+
+def estimate_S_scale(proton_flux, projected_df=None):
+    est = 0
+    if proton_flux >= 100:
+        est = 3
+    elif proton_flux >= 10:
+        est = 2
+    elif proton_flux >= 1:
+        est = 1
+    if projected_df is not None and not projected_df.empty and projected_df['flux'].max() >= 100:
+        est = max(est, 3)
+    return f"S{est}" if est > 0 else "Quiet"
