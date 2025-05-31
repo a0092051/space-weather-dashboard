@@ -247,8 +247,11 @@ def get_sep_flux_data_and_projection():
         df['time_tag'] = pd.to_datetime(df['time_tag'])
         df['flux'] = pd.to_numeric(df['flux'], errors='coerce')
         df['energy'] = df['energy'].astype(str)
+
+        # Filter only >10 MeV channel
         df = df[df['energy'].str.contains('10', na=False)].sort_values("time_tag")
         df = df.dropna(subset=["flux"])
+        df_actual = df[['time_tag', 'flux']].copy()
 
         projection_df = pd.DataFrame()
         if len(df) > 15:
@@ -258,20 +261,30 @@ def get_sep_flux_data_and_projection():
 
             with np.errstate(divide='ignore'):
                 log_y = np.log(y + 1e-9)
-            coeffs = np.polyfit(x, log_y, 1)
+
+            coeffs, cov = np.polyfit(x, log_y, 1, cov=True)
+            m, c = coeffs
+            var_m, var_c = cov[0, 0], cov[1, 1]
+            cov_mc = cov[0, 1]
 
             future_min = np.arange(x[-1] + 5, x[-1] + 65, 5)
-            projected_log = coeffs[0] * future_min + coeffs[1]
-            projected_flux = np.exp(projected_log)
+            projected_log = m * future_min + c
+
+            # Proper upper bound with growing error over time
+            std_err = np.sqrt(var_m * future_min**2 + var_c + 2 * cov_mc * future_min)
+            upper_log = projected_log + 1.96 * std_err  # 95% CI upper band
+            projected_flux = np.exp(upper_log)
 
             future_time = [df['time_tag'].iloc[0] + pd.Timedelta(minutes=m) for m in future_min]
             projection_df = pd.DataFrame({"time_tag": future_time, "flux": projected_flux})
 
-        return df[['time_tag', 'flux']], projection_df
+        return df_actual, projection_df
 
     except Exception as e:
         print("Error fetching or processing SEP data:", e)
         return None, None
+
+
 def estimate_space_weather_risk(conditions, flare_flux, proton_flux, proj_proton_df):
     risk = {
         "s3_plus_prob": 0,

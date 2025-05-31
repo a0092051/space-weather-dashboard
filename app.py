@@ -1,6 +1,7 @@
 import streamlit as st
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 import os
 from datetime import datetime
 from alert import send_telegram_alert
@@ -129,28 +130,92 @@ col2.metric("Proton Flux (>10 MeV)", f"{sep_flux:.1f} pfu" if sep_flux else "N/A
 col2.metric("Radiation Storm Level", sep_class)
 
 # Proton Flux Trend + Projection
-st.subheader("📊 Proton Flux Trend & Projection")
-if actual_df is not None:
+st.subheader("📊 Proton Flux Trend & 8-Hour Projection")
+if actual_df is not None and not actual_df.empty:
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(actual_df['time_tag'], actual_df['flux'], label='Observed (>10 MeV)', color='blue', linewidth=2)
-    if proj_df is not None and not proj_df.empty:
-        ax.plot(proj_df['time_tag'], proj_df['flux'], '--', label='Projected (Next 1hr)', color='orange', linewidth=2)
 
+    # Plot observed data
+    ax.plot(actual_df['time_tag'], actual_df['flux'], label='Observed (>10 MeV)', color='blue', linewidth=2)
+
+    # Plot original 95% CI projection (orange)
+    if proj_df is not None and not proj_df.empty:
+        ax.plot(proj_df['time_tag'], proj_df['flux'], '--', label='Projection A: 95% CI Upper Bound', color='orange', linewidth=2)
+
+        flux_proj_recent = None
+        flux_proj_d = None
+        time_proj_recent = None
+
+        # Fit to last 60 minutes (Projection B: Green)
+        recent_df = actual_df[actual_df['time_tag'] > actual_df['time_tag'].iloc[-1] - pd.Timedelta(minutes=60)]
+        if len(recent_df) > 10:
+            recent_df = recent_df.copy()
+            recent_df['elapsed_min'] = (recent_df['time_tag'] - recent_df['time_tag'].iloc[0]).dt.total_seconds() / 60
+            x_recent = recent_df['elapsed_min'].values
+            y_recent = recent_df['flux'].values
+            log_y_recent = np.log(y_recent + 1e-9)
+            coeffs_recent = np.polyfit(x_recent, log_y_recent, 1)
+            future_min = np.arange(x_recent[-1] + 5, x_recent[-1] + 485, 5)  # 8-hour projection
+            projected_log_recent = coeffs_recent[0] * future_min + coeffs_recent[1]
+            flux_proj_recent = np.exp(projected_log_recent)
+            time_proj_recent = [recent_df['time_tag'].iloc[0] + pd.Timedelta(minutes=m) for m in future_min]
+            ax.plot(time_proj_recent, flux_proj_recent, '--', label='Projection B: Last 60min Fit', color='green', linewidth=2)
+
+        # Quadratic Fit (Projection C: Purple)
+        df_quad = actual_df.copy()
+        df_quad['elapsed_min'] = (df_quad['time_tag'] - df_quad['time_tag'].iloc[0]).dt.total_seconds() / 60
+        x_quad = df_quad['elapsed_min'].values
+        y_quad = df_quad['flux'].values
+        log_y_quad = np.log(y_quad + 1e-9)
+        if len(x_quad) > 15:
+            coeffs_quad = np.polyfit(x_quad, log_y_quad, 2)
+            future_min_quad = np.arange(x_quad[-1] + 5, x_quad[-1] + 485, 5)  # 8-hour projection
+            projected_log_quad = coeffs_quad[0] * future_min_quad**2 + coeffs_quad[1] * future_min_quad + coeffs_quad[2]
+            flux_proj_quad = np.exp(projected_log_quad)
+            time_proj_quad = [df_quad['time_tag'].iloc[0] + pd.Timedelta(minutes=m) for m in future_min_quad]
+            ax.plot(time_proj_quad, flux_proj_quad, '--', label='Projection C: Quadratic Fit', color='purple', linewidth=2)
+
+        # Aggressive Boost Fit (Projection D: Red, 1.5x slope from last 4 hours)
+        if len(actual_df) > 10:
+            cutoff_time_d = actual_df['time_tag'].iloc[-1] - pd.Timedelta(hours=4)
+            tail_df = actual_df[actual_df['time_tag'] >= cutoff_time_d].copy()
+            if len(tail_df) > 2:
+                tail_df['elapsed_min'] = (tail_df['time_tag'] - tail_df['time_tag'].iloc[0]).dt.total_seconds() / 60
+                x_tail = tail_df['elapsed_min'].values
+                y_tail = tail_df['flux'].values
+                log_y_tail = np.log(y_tail + 1e-9)
+                m_tail, c_tail = np.polyfit(x_tail, log_y_tail, 1)
+                m_boosted = m_tail * 1.5
+                future_min_d = np.arange(x_tail[-1] + 5, x_tail[-1] + 485, 5)  # 8-hour projection
+                proj_log_d = m_boosted * future_min_d + c_tail
+                flux_proj_d = np.exp(proj_log_d)
+                time_proj_d = [tail_df['time_tag'].iloc[0] + pd.Timedelta(minutes=m) for m in future_min_d]
+                ax.plot(time_proj_d, flux_proj_d, '--', label='Projection D: Aggressive Boost (4h)', color='red', linewidth=2)
+
+        # Average of B and D (Projection E: Brown)
+        if flux_proj_recent is not None and flux_proj_d is not None and time_proj_recent is not None:
+            min_len = min(len(flux_proj_recent), len(flux_proj_d))
+            avg_flux = (flux_proj_recent[:min_len] + flux_proj_d[:min_len]) / 2
+            avg_time = time_proj_recent[:min_len]
+            ax.plot(avg_time, avg_flux, '--', label='Projection E: Avg(B+D) Hybrid', color='brown', linewidth=2)
+
+    # Add S-level thresholds
     thresholds = {"S1 (10)": 10, "S2 (100)": 100, "S3 (1000)": 1000, "S4 (10000)": 10000, "S5 (100000)": 100000}
     for label, value in thresholds.items():
         ax.axhline(value, linestyle='--', linewidth=1, color='gray')
         ax.text(actual_df['time_tag'].iloc[-1], value * 1.1, label, fontsize=8, color='gray', verticalalignment='bottom')
 
     ax.set_yscale('log')
+    ax.set_ylim(bottom=0.1, top=max(actual_df['flux'].max(), proj_df['flux'].max()) * 10)
     ax.set_xlabel("Time (UTC)")
     ax.set_ylabel("Flux (pfu)")
-    ax.set_title("GOES Proton Flux – Real-Time + 1-Hour Projection")
+    ax.set_title("GOES Proton Flux – Real-Time + 8-Hour Projection")
     ax.legend()
     ax.grid(True)
     fig.autofmt_xdate()
     st.pyplot(fig)
 else:
     st.warning("Unable to retrieve or display proton flux data.")
+
 
 from main_script import estimate_cme_eta
 
