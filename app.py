@@ -299,7 +299,7 @@ if combined_score >= 7:
 
     send_telegram_alert(
     bot_token="7926241461:AAH-otA3NdtIcIExlk5LD12-2ygohcQ5cQs",
-            chat_id="-1002001864016",
+            chat_id="78372772",
         message=alert_message
     )
 
@@ -327,7 +327,7 @@ if st.button("Send Test Alert Now"):
 
     success = send_telegram_alert(
         bot_token="7926241461:AAH-otA3NdtIcIExlk5LD12-2ygohcQ5cQs",
-            chat_id="-1002001864016",
+            chat_id="78372772",
         message=test_message
     )
     if success:
